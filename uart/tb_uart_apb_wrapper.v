@@ -1,25 +1,4 @@
-// ---------------------------------------------------------------
-// tb_uart_apb_wrapper.v
-//
-// Loopback testbench: uart_apb_wrapper's TXD is wired directly to
-// its own RXD. A byte written to TX_DATA over the (simulated) APB
-// bus should come back out through RX_DATA after transmission
-// completes.
-//
-// This exercises your REAL uart_tx.v and uartreciever.v cores (not a
-// mock) through the actual register interface — it's the closest
-// thing to an end-to-end check we can do without real hardware.
-//
-// NOTE: this only proves the wrapper's register plumbing is correct
-// and that the two cores agree on the wire. It does not independently
-// verify the rx core's internal state machine (S1-S3) — if that FSM
-// has a bug, this test would only catch it if it causes a wrong byte
-// or a timeout, not diagnose it.
-//
-// Run with (paths assume this repo's flat uart/ folder layout):
-//   iverilog -o sim tb_uart_apb_wrapper.v apb_slave.v uart_apb_wrapper.v tx.v uartreciever.v
-//   vvp sim
-// ---------------------------------------------------------------
+
 `timescale 1ns/1ps
 
 module tb_uart_apb_wrapper;
@@ -38,13 +17,12 @@ module tb_uart_apb_wrapper;
   wire              PREADY;
   wire              PSLVERR;
 
-  wire              serial_line; // txd looped back to rxd
+  wire              serial_line;
 
   integer errors = 0;
 
-  // ---- Clock / reset ----
   initial PCLK = 0;
-  always #5 PCLK = ~PCLK; // 100 MHz
+  always #5 PCLK = ~PCLK; 
 
   initial begin
     PRESETn = 0;
@@ -52,7 +30,7 @@ module tb_uart_apb_wrapper;
     PRESETn = 1;
   end
 
-  // ---- DUT ----
+  
   uart_apb_wrapper #(.DATA_W(DATA_W), .ADDR_W(ADDR_W)) dut (
     .PCLK     (PCLK),
     .PRESETn  (PRESETn),
@@ -65,10 +43,10 @@ module tb_uart_apb_wrapper;
     .PREADY   (PREADY),
     .PSLVERR  (PSLVERR),
     .uart_txd (serial_line),
-    .uart_rxd (serial_line)   // loopback
+    .uart_rxd (serial_line)  
   );
 
-  // ---- APB master BFM ----
+  
   task apb_write(input [ADDR_W-1:0] addr, input [DATA_W-1:0] data);
     begin
       @(posedge PCLK);
@@ -79,7 +57,7 @@ module tb_uart_apb_wrapper;
       PENABLE <= 1'b0;
       @(posedge PCLK);
       PENABLE <= 1'b1;
-      @(posedge PCLK); // ACCESS phase completes here (PREADY tied high)
+      @(posedge PCLK); 
       PSEL    <= 1'b0;
       PENABLE <= 1'b0;
     end
@@ -114,47 +92,44 @@ module tb_uart_apb_wrapper;
 
   reg [DATA_W-1:0] rdata;
 
-  // clkperbits = 5208 in both cores; 10 bits per frame (start+8+stop)
-  // at a 10ns clock period. Generous margin added on top.
+  
   localparam integer BIT_CYCLES   = 5208;
   localparam integer FRAME_CYCLES = 10 * BIT_CYCLES;
 
-  // ---- Test sequence ----
+  
   initial begin
     PADDR = 0; PWDATA = 0; PSEL = 0; PENABLE = 0; PWRITE = 0;
 
     @(posedge PRESETn);
     repeat (2) @(posedge PCLK);
 
-    // 1) Enable the UART
+  
     apb_write(32'h0C, 32'h1);
     apb_read(32'h0C, rdata);
     check(rdata[0] == 1'b1, "CONTROL.enable readback");
 
-    // 2) Write TX_DATA — should kick off a transmit
+   
     apb_write(32'h00, 32'h000000A5);
 
     @(posedge PCLK);
     apb_read(32'h08, rdata);
     check(rdata[0] == 1'b1, "STATUS.tx_busy=1 shortly after TX_DATA write");
 
-    // 3) Wait out one full frame time (plus margin) for TX to finish
-    //    and for the looped-back RX to receive it.
+  
     repeat (FRAME_CYCLES + 2 * BIT_CYCLES) @(posedge PCLK);
 
     apb_read(32'h08, rdata);
     check(rdata[0] == 1'b0, "STATUS.tx_busy=0 after transmit completes");
     check(rdata[1] == 1'b1, "STATUS.rx_valid=1 after loopback reception");
 
-    // 4) Read RX_DATA and confirm it matches what was sent
+ 
     apb_read(32'h04, rdata);
     check(rdata[7:0] == 8'hA5, "RX_DATA matches transmitted byte (0xA5)");
 
-    // 5) Read-to-clear: rx_valid should drop after reading RX_DATA
     apb_read(32'h08, rdata);
     check(rdata[1] == 1'b0, "STATUS.rx_valid=0 after read-to-clear");
 
-    // 6) Out-of-range address should assert PSLVERR
+    
     @(posedge PCLK);
     PADDR <= 32'h20; PWRITE <= 1'b0; PSEL <= 1'b1; PENABLE <= 1'b0;
     @(posedge PCLK);
@@ -163,7 +138,7 @@ module tb_uart_apb_wrapper;
     check(PSLVERR == 1'b1, "PSLVERR asserted for out-of-range address");
     PSEL <= 1'b0; PENABLE <= 1'b0;
 
-    // 7) TX_DATA should read back as 0 (write-only)
+ 
     apb_read(32'h00, rdata);
     check(rdata == 32'h0, "TX_DATA reads as 0 (write-only)");
 
@@ -176,7 +151,6 @@ module tb_uart_apb_wrapper;
     $finish;
   end
 
-  // Safety timeout in case the loopback never completes
   initial begin
     #(20_000_000);
     $display("\nTIMEOUT — simulation did not finish in time");
