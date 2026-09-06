@@ -104,16 +104,3 @@ vvp uart_sim
 gtkwave uart_sim.vcd
 ```
 
-(Update `rx_tb.v` to instantiate both `uart` and `uart_tx` if you want a full loopback test rather than an RX-only testbench.)
-
-## Status / TODO
-
-- [x] UART RX module — complete and verified
-- [x] UART TX module
-- [ ] Combined RX+TX loopback testbench
-- [ ] Parity bit support
-- [ ] Configurable data width / stop bits
-
-## License
-
-Add your preferred license here (e.g., MIT).
