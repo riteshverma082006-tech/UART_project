@@ -108,7 +108,7 @@ module uart_apb_wrapper #(
       rx_valid <= 1'b0;
     end
   end
-.
+
   uart u_rx (
     .clk   (PCLK),
     .reset (PRESETn),
