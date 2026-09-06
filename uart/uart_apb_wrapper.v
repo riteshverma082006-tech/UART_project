@@ -79,18 +79,7 @@ module uart_apb_wrapper #(
     .done    (tx_done)
   );
 
-  // ---- RX start-bit detection ----
-  // The raw 'uart' core needs an external 'ready' pulse timed exactly at
-  // the start of an incoming start bit -- it does NOT detect the start bit
-  // itself. Previously this was tied straight to 'enable' (a level, held
-  // high indefinitely once enabled), which only happened to work in the
-  // loopback testbench because the TX write landed at a lucky offset.
-  // Real, asynchronously-timed traffic would not be reliably received.
-  //
-  // Fix: synchronize uart_rxd, detect a real falling edge (line idles
-  // high, start bit pulls it low), and only recognize it once 'enable'
-  // is set. This mirrors the uart_rx_wrapper approach used in the
-  // RISC-V SoC integration.
+  
   reg d_sync, d_prev;
   always @(posedge PCLK or negedge PRESETn) begin
     if (!PRESETn) begin
