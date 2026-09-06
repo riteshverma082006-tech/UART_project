@@ -1,27 +1,3 @@
-// ---------------------------------------------------------------
-// uart_apb_wrapper.v
-//
-// Memory-mapped APB slave wrapper around an existing UART TX/RX
-// core. This module owns all UART-specific register semantics;
-// apb_slave.v stays a generic, reusable bus-protocol shim.
-//
-// Register map (word-aligned, byte offsets from base address):
-//   0x00  TX_DATA   (WO)  bits[7:0]  = byte to transmit. Writing this
-//                         register pulses uart_tx_start for one cycle.
-//   0x04  RX_DATA   (RO)  bits[7:0]  = last received byte. Reading
-//                         this register pulses uart_rx_clear, acking
-//                         the byte (classic read-to-clear behavior).
-//   0x08  STATUS    (RO)  bit0 = tx_busy, bit1 = rx_valid,
-//                         bit2 = frame_err
-//   0x0C  CONTROL   (RW)  bits[15:0] = baud_div, bit16 = enable
-//
-// *** PORT NAMES BELOW ARE PLACEHOLDERS ***
-// Swap uart_tx_*/uart_rx_* for whatever your existing UART core's
-// ports are actually called, and double check the tx_start pulse
-// timing assumption noted above uart_tx_start (some UART cores want
-// a single-cycle pulse, others want the start signal held until
-// tx_busy rises — check your core before wiring this up).
-// ---------------------------------------------------------------
 module uart_apb_wrapper #(
   parameter DATA_W = 32,
   parameter ADDR_W = 32
@@ -29,7 +5,7 @@ module uart_apb_wrapper #(
   input  wire              PCLK,
   input  wire              PRESETn,
 
-  // APB bus
+  
   input  wire [ADDR_W-1:0] PADDR,
   input  wire              PSEL,
   input  wire              PENABLE,
@@ -38,19 +14,8 @@ module uart_apb_wrapper #(
   output wire [DATA_W-1:0] PRDATA,
   output wire              PREADY,
   output wire              PSLVERR,
-
-  // --- UART core ports (placeholders — rename to match your core) ---
-  output reg  [7:0]        uart_tx_data,
-  output reg               uart_tx_start,   // pulse: load + start transmit
-  input  wire              uart_tx_busy,
-
-  input  wire [7:0]        uart_rx_data,
-  input  wire              uart_rx_valid,   // high when a byte has arrived
-  output reg               uart_rx_clear,   // pulse: ack / clear rx_valid
-  input  wire              uart_frame_err,
-
-  output reg  [15:0]       uart_baud_div,
-  output reg               uart_enable
+  output wire              uart_txd,
+  input  wire              uart_rxd
 );
 
   localparam ADDR_TXDATA  = 2'b00;
@@ -58,7 +23,6 @@ module uart_apb_wrapper #(
   localparam ADDR_STATUS  = 2'b10;
   localparam ADDR_CONTROL = 2'b11;
 
-  wire              reg_addr_valid; // unused placeholder to avoid lint warnings
   wire [1:0]        reg_addr;
   wire              wr_pulse, rd_pulse;
   reg  [DATA_W-1:0] rd_data;
@@ -80,50 +44,87 @@ module uart_apb_wrapper #(
     .rd_data  (rd_data)
   );
 
-  assign reg_addr_valid = 1'b1; // tie-off, silences "unused" lint noise
+  reg enable;
 
-  // ---- WRITE side ----
+  always @(posedge PCLK or negedge PRESETn) begin
+    if (!PRESETn)
+      enable <= 1'b0;
+    else if (wr_pulse && reg_addr == ADDR_CONTROL)
+      enable <= PWDATA[0];
+  end
+
+
+  reg  [7:0] tx_data_reg;
+  reg        tx_send_pulse;
+  reg        tx_busy;
+  wire       tx_done;
+
   always @(posedge PCLK or negedge PRESETn) begin
     if (!PRESETn) begin
-      uart_tx_data  <= 8'h0;
-      uart_tx_start <= 1'b0;
-      uart_baud_div <= 16'h0;
-      uart_enable   <= 1'b0;
+      tx_data_reg   <= 8'h0;
+      tx_send_pulse <= 1'b0;
     end else begin
-      uart_tx_start <= 1'b0; // default low; only pulses high for 1 cycle below
-
-      if (wr_pulse) begin
-        case (reg_addr)
-          ADDR_TXDATA: begin
-            uart_tx_data  <= PWDATA[7:0];
-            uart_tx_start <= 1'b1;
-          end
-          ADDR_CONTROL: begin
-            uart_baud_div <= PWDATA[15:0];
-            uart_enable   <= PWDATA[16];
-          end
-          default: ; // RX_DATA (01) and STATUS (10) are read-only
-        endcase
+      tx_send_pulse <= 1'b0; 
+      if (wr_pulse && reg_addr == ADDR_TXDATA) begin
+        tx_data_reg   <= PWDATA[7:0];
+        tx_send_pulse <= 1'b1;
       end
     end
   end
 
-  // ---- READ side ----
-  // Read-to-clear: reading RX_DATA acks the byte and drops rx_valid.
   always @(posedge PCLK or negedge PRESETn) begin
     if (!PRESETn)
-      uart_rx_clear <= 1'b0;
-    else
-      uart_rx_clear <= rd_pulse && (reg_addr == ADDR_RXDATA);
+      tx_busy <= 1'b0;
+    else if (tx_done)
+      tx_busy <= 1'b0;
+    else if (tx_send_pulse)
+      tx_busy <= 1'b1;
   end
+
+  uart_tx u_tx (
+    .clk     (PCLK),
+    .reset   (PRESETn),
+    .send    (tx_send_pulse),
+    .data_in (tx_data_reg),
+    .tx      (uart_txd),
+    .done    (tx_done)
+  );
+
+
+  reg  [7:0] rx_data_reg;
+  reg        rx_valid;
+  wire [7:0] rx_data_core;
+  wire       rx_done;
+  wire       rx_clear_pulse = rd_pulse && (reg_addr == ADDR_RXDATA);
+
+  always @(posedge PCLK or negedge PRESETn) begin
+    if (!PRESETn) begin
+      rx_data_reg <= 8'h0;
+      rx_valid    <= 1'b0;
+    end else if (rx_done) begin
+      rx_data_reg <= rx_data_core;
+      rx_valid    <= 1'b1;
+    end else if (rx_clear_pulse) begin
+      rx_valid <= 1'b0;
+    end
+  end
+.
+  uart u_rx (
+    .clk   (PCLK),
+    .reset (PRESETn),
+    .d     (uart_rxd),
+    .ready (enable),
+    .data  (rx_data_core),
+    .done  (rx_done)
+  );
+
 
   always @(*) begin
     case (reg_addr)
-      ADDR_TXDATA:  rd_data = {DATA_W{1'b0}}; // write-only, reads as 0
-      ADDR_RXDATA:  rd_data = {{(DATA_W-8){1'b0}}, uart_rx_data};
-      ADDR_STATUS:  rd_data = {{(DATA_W-3){1'b0}},
-                                 uart_frame_err, uart_rx_valid, uart_tx_busy};
-      ADDR_CONTROL: rd_data = {{(DATA_W-17){1'b0}}, uart_enable, uart_baud_div};
+      ADDR_TXDATA:  rd_data = {DATA_W{1'b0}}; 
+      ADDR_RXDATA:  rd_data = {{(DATA_W-8){1'b0}}, rx_data_reg};
+      ADDR_STATUS:  rd_data = {{(DATA_W-2){1'b0}}, rx_valid, tx_busy};
+      ADDR_CONTROL: rd_data = {{(DATA_W-1){1'b0}}, enable};
       default:      rd_data = {DATA_W{1'b0}};
     endcase
   end
